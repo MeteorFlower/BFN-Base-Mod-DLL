@@ -1,0 +1,23 @@
+# Build output
+obj/
+*.obj
+src/AutoOffline.dll
+
+# MSVC
+*.pdb
+*.ilk
+*.exp
+*.lib
+.vs/
+
+# The game executables / IDA databases / asset dumps must never be committed.
+# They are EA's property and have nothing to do with this source.
+*.exe
+*.i64
+*.idb
+*.dll
+!dist/RtWorkQ.dll
+
+# Logs
+*.log
+autooffline_log*.txt

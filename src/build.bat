@@ -1,0 +1,86 @@
+@echo off
+REM ===========================================================================
+REM  AutoOffline.dll build script (MSVC)
+REM
+REM  Deployment: the resulting DLL is renamed to RtWorkQ.dll and placed in the
+REM  game folder. The game loads it by itself - see README.md.
+REM
+REM  Build it and compare against dist\RtWorkQ.dll to verify the published
+REM  binary matches this source.
+REM ===========================================================================
+setlocal
+cd /d "%~dp0"
+
+REM ---- locate the Visual Studio C++ toolchain -------------------------------
+REM  Preferred: vswhere.exe, which ships with every Visual Studio installer.
+REM  Fallback: scan the install roots for any version / edition.
+set "VCVARS="
+
+set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
+if not exist "%VSWHERE%" set "VSWHERE=%ProgramFiles%\Microsoft Visual Studio\Installer\vswhere.exe"
+if exist "%VSWHERE%" call :findWithVswhere
+
+if not defined VCVARS (
+    for %%R in ("%ProgramFiles%" "%ProgramFiles(x86)%") do (
+        for /d %%V in ("%%~R\Microsoft Visual Studio\*") do (
+            for /d %%E in ("%%~V\*") do (
+                if not defined VCVARS (
+                    if exist "%%~E\VC\Auxiliary\Build\vcvars64.bat" set "VCVARS=%%~E\VC\Auxiliary\Build\vcvars64.bat"
+                )
+            )
+        )
+    )
+)
+
+if not defined VCVARS (
+    echo [!] Could not find vcvars64.bat.
+    echo.
+    echo     You need the Visual Studio C++ build tools. The free
+    echo     "Build Tools for Visual Studio" is enough:
+    echo       https://visualstudio.microsoft.com/downloads/
+    echo     Select the "Desktop development with C++" workload.
+    echo.
+    echo     If Visual Studio is installed somewhere unusual, set VCVARS
+    echo     manually at the top of this script.
+    exit /b 1
+)
+
+echo [*] Using: %VCVARS%
+call "%VCVARS%" >nul
+if errorlevel 1 ( echo [!] vcvars failed & exit /b 1 )
+
+if not exist obj mkdir obj
+
+echo [*] Compiling...
+cl /nologo /LD /O2 /MT /EHsc /W3 /D_CRT_SECURE_NO_WARNINGS ^
+   AutoOffline.cpp /Fe:AutoOffline.dll /Fo:obj\ ^
+   /link kernel32.lib
+if errorlevel 1 ( echo. & echo [!] BUILD FAILED & exit /b 1 )
+
+echo.
+echo [*] Done:
+dir /b AutoOffline.dll
+echo.
+echo Verify it against the published binary:
+echo    python ..\verify-build.py AutoOffline.dll ..\dist\RtWorkQ.dll
+echo.
+echo (The raw SHA-256 will NOT match - the linker stamps the build time into the
+echo  binary. verify-build.py zeroes that field in both files before comparing.)
+echo.
+echo To use it: rename it to RtWorkQ.dll and put it in the game folder -
+echo or simply run helper-scripts\1-disable-eaac.bat, which does that for you.
+
+exit /b 0
+
+REM ---- ask vswhere where Visual Studio is ------------------------------------
+:findWithVswhere
+REM  The result is read back from a file rather than with a `for /f` backtick
+REM  command: cmd's quote handling for those is fragile when the executable
+REM  path contains parentheses, as "Program Files (x86)" does.
+set "VSW_TMP=%TEMP%\_bfnbase_vswhere.txt"
+"%VSWHERE%" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath > "%VSW_TMP%" 2>nul
+for /f "usebackq tokens=*" %%i in ("%VSW_TMP%") do (
+    if not defined VCVARS if exist "%%i\VC\Auxiliary\Build\vcvars64.bat" set "VCVARS=%%i\VC\Auxiliary\Build\vcvars64.bat"
+)
+del "%VSW_TMP%" 2>nul
+exit /b 0
