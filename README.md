@@ -1,7 +1,7 @@
 # BFN Base Mod - source code
 
 Source for the DLL and helper scripts shipped with the Nexus release
-**"Base Mod for the New Version - No Downgrade"** for *Plants vs. Zombies:
+**"Base Mod for the New Version"** for *Plants vs. Zombies:
 Battle for Neighborville*.
 
 This repository exists so that anyone - players, and Nexus Mods staff reviewing
