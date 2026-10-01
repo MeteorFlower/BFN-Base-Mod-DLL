@@ -1,11 +1,11 @@
-# BFN Base Mod — source code
+# BFN Base Mod - source code
 
 Source for the DLL and helper scripts shipped with the Nexus release
 **"Base Mod for the New Version - No Downgrade"** for *Plants vs. Zombies:
 Battle for Neighborville*.
 
-This repository exists so that anyone — players, and Nexus Mods staff reviewing
-the upload — can read exactly what the files do before running them.
+This repository exists so that anyone - players, and Nexus Mods staff reviewing
+the upload - can read exactly what the files do before running them.
 
 ---
 
@@ -19,13 +19,13 @@ why it happens:**
 
 The mod works by *DLL search-order hijacking*. The game process calls
 `LoadLibrary("RtWorkQ.dll")` by bare name, so Windows looks in the game's own
-folder first — and loads ours instead of the system copy in `System32`.
+folder first - and loads ours instead of the system copy in `System32`.
 
 That is a legitimate, decades-old modding technique. It is also a technique
 malware uses, so **any DLL proxy trips pattern-based scanners**. There is no
 way to ship this mod without tripping them.
 
-Note that the game never calls any function *from* `RtWorkQ.dll` — the file
+Note that the game never calls any function *from* `RtWorkQ.dll` - the file
 name is only used as an entry point. Our DLL exports nothing. See
 [How it works](#how-it-works) below.
 
@@ -42,7 +42,7 @@ no obfuscation, no downloads, no encoded blobs.
 
 - It does **not** connect to the network. There is no socket, no HTTP, no WinINet.
 - It does **not** read, collect, or transmit any personal data.
-- It does **not** inject into another process. It *is* the process — the game loads it.
+- It does **not** inject into another process. It *is* the process - the game loads it.
 - It does **not** modify any file. It writes one log file, `autooffline_log.txt`,
   next to itself.
 - It does **not** touch the game's memory beyond the handful of byte patches listed below.
@@ -53,24 +53,16 @@ no obfuscation, no downloads, no encoded blobs.
 
 | Path | What it is |
 |---|---|
-| `src/AutoOffline.cpp` | The DLL source. This is the whole program — 670 lines. |
+| `src/AutoOffline.cpp` | The DLL source. This is the whole program - 670 lines. |
 | `src/build.bat` | Builds it with MSVC. |
-| `verify-build.py` | Compares a rebuild against the published binary (see below). |
 | `helper-scripts/1-disable-eaac.bat` | Disables EAAC and installs `RtWorkQ.dll`. |
 | `helper-scripts/2-enable-eaac.bat` | Undoes that. |
-| `dist/RtWorkQ.dll` | The **exact binary** published on Nexus. |
 
-### Verifying the published binary
+### Getting the DLL
 
-The `dist/RtWorkQ.dll` in this repository is the same file that was uploaded to
-Nexus. SHA-256:
-
-```
-6403c7d608260337f52cee4aeb53ab92ed99c8e63a090a2b61bc5364ceeb9a28
-```
-
-Build it yourself and compare — see [Building](#building). Note that a correct
-rebuild will **not** produce that hash; the next section explains why.
+Either take `RtWorkQ.dll` from the **Releases** page of this repository, or
+build it yourself from `src/` - see [Building](#building). Both are the same
+program. There is no single canonical binary.
 
 ---
 
@@ -79,8 +71,22 @@ rebuild will **not** produce that hash; the next section explains why.
 **Requirements**
 
 - Windows 10 / 11
-- Visual Studio 2019 or 2022 with the **C++ build tools**
-  (the free *Build Tools for Visual Studio* is enough)
+- **Build Tools for Visual Studio 2026** with the *Desktop development with C++*
+  workload. It is free and includes no IDE:
+
+  <https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2026>
+
+  The installer is `vs_BuildTools.exe`. By default `vcvars64.bat` ends up in
+  `C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\VC\Auxiliary\Build\`.
+
+  Or via winget:
+
+  ```
+  winget install Microsoft.VisualStudio.BuildTools --force --override "--wait --passive --add Microsoft.VisualStudio.Component.VC.Tools.x86.x64"
+  ```
+
+  Older toolsets (VS 2019 / 2022) work too - they just produce a different
+  binary.
 
 **Steps**
 
@@ -92,40 +98,35 @@ build.bat
 `build.bat` calls `vcvars64.bat` and then:
 
 ```
-cl /nologo /LD /O2 /MT /EHsc /W3 /D_CRT_SECURE_NO_WARNINGS ^
+cl /nologo /LD /O2 /MT /EHsc /W3 /Brepro /D_CRT_SECURE_NO_WARNINGS ^
    AutoOffline.cpp /Fe:AutoOffline.dll /Fo:obj\ ^
    /link kernel32.lib
 ```
 
-If your Visual Studio lives somewhere other than the default path, edit the
-`VCVARS` variable at the top of `build.bat`.
+`build.bat` locates the toolchain itself: it asks `vswhere.exe` first and falls
+back to scanning the install roots. If it finds nothing it stops and tells you
+what to install.
 
-**Comparing your build with the published one**
+`/Brepro` makes the build reproducible, so the same source always produces the
+same bytes on the same toolchain. Without it the linker stamps the build time
+into the binary - twice, in the COFF header and again in the
+`IMAGE_DEBUG_TYPE_REPRO` debug entry - and no two builds would ever match.
 
-A rebuild is *not* hash-identical to `dist/RtWorkQ.dll`, and a matching hash is
-not the right test. The linker stamps the build time into the binary twice: in
-the COFF header `TimeDateStamp`, and again in the `TimeDateStamp` field of the
-`IMAGE_DEBUG_TYPE_REPRO` entry in the debug directory. Those two 4-byte fields
-always differ from one build to the next — even between two builds of identical
-source. **Every other byte is identical.**
+**Toolchain**
 
-So compare the files with those two fields zeroed:
-
-```
-python verify-build.py AutoOffline.dll ..\dist\RtWorkQ.dll
-```
-
-It zeroes the fields in both files and prints one hash each. Both should be:
+For reference, the released binary was built with:
 
 ```
-23a4081a780f2027606719c57e7f13d0a68bbdcbb096ab10ee9f6709070ad075
+Build Tools for Visual Studio 2026, version 18.7.4
+Microsoft (R) C/C++ Optimizing Compiler Version 19.51.36248 for x64
+Microsoft (R) Incremental Linker Version 14.51.36248.0
 ```
 
-You can see the two timestamps without any tooling:
+`build.bat` prints its own versions when you run it.
 
-```
-dumpbin /headers AutoOffline.dll
-```
+Any current MSVC builds this source. A different one links different library
+code and so produces a different binary - expected, and harmless. What is worth
+checking is the source, not the bytes.
 
 ---
 
@@ -136,7 +137,7 @@ The full explanation is in the comment block at the top of
 
 **1. Getting loaded.** The game loads `RtWorkQ.dll` by bare name, so our copy in
 the game folder wins. Our `DllMain` is the entry point. No injector, no
-external tool — the game loads us itself.
+external tool - the game loads us itself.
 
 **2. Waiting for decryption.** The executable is protected, and its code is
 decrypted at runtime. Patching too early would write into still-encrypted data
@@ -159,7 +160,7 @@ runtime rather than patched, because they live in objects rather than in code.
 Both scripts are self-contained and **ask for administrator rights**, because
 they rename and copy files inside the game folder.
 
-- **They find your game automatically** — Steam registry, Steam library folders,
+- **They find your game automatically** - Steam registry, Steam library folders,
   the EA app registry, then common install locations. You can also drag your
   game folder onto the `.bat` if detection fails.
 - **Nothing is ever deleted.** A foreign `RtWorkQ.dll` is moved to a `stale\`
@@ -167,13 +168,13 @@ they rename and copy files inside the game folder.
   `RtWorkQ.dll` that is byte-identical to the one shipped here.
 - **They refuse to run while the game is open**, so files are never changed
   underneath a running game.
-- **They are idempotent** — running them repeatedly is safe.
+- **They are idempotent** - running them repeatedly is safe.
 
 ---
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT - see [LICENSE](LICENSE).
 
 This project is not affiliated with, endorsed by, or sponsored by Electronic
 Arts Inc. It is an independent, community-developed mod for educational and

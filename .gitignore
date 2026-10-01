@@ -16,7 +16,9 @@ src/AutoOffline.dll
 *.i64
 *.idb
 *.dll
-!dist/RtWorkQ.dll
+
+# Build output. Released binaries live on the Releases page, not in the repo.
+dist/
 
 # Logs
 *.log

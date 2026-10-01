@@ -8,5 +8,5 @@
 *.md    text
 *.txt   text
 
-# Keep the published binary binary.
+# Binaries must never be line-ending normalised.
 *.dll   binary

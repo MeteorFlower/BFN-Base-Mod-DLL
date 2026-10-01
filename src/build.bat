@@ -5,8 +5,8 @@ REM
 REM  Deployment: the resulting DLL is renamed to RtWorkQ.dll and placed in the
 REM  game folder. The game loads it by itself - see README.md.
 REM
-REM  Build it and compare against dist\RtWorkQ.dll to verify the published
-REM  binary matches this source.
+REM  The build is reproducible: the same source on the same toolchain gives the
+REM  same bytes. See the Toolchain section of README.md.
 REM ===========================================================================
 setlocal
 cd /d "%~dp0"
@@ -51,8 +51,15 @@ if errorlevel 1 ( echo [!] vcvars failed & exit /b 1 )
 
 if not exist obj mkdir obj
 
+REM Print the toolchain, for reference. A different MSVC version produces a
+REM different binary - see README.md.
+cl 2>&1 | findstr /C:"Version"
+link 2>&1 | findstr /C:"Version"
+
 echo [*] Compiling...
-cl /nologo /LD /O2 /MT /EHsc /W3 /D_CRT_SECURE_NO_WARNINGS ^
+REM /Brepro = reproducible build. Without it the linker stamps the build time
+REM into the binary, so no two builds of the same source would ever match.
+cl /nologo /LD /O2 /MT /EHsc /W3 /Brepro /D_CRT_SECURE_NO_WARNINGS ^
    AutoOffline.cpp /Fe:AutoOffline.dll /Fo:obj\ ^
    /link kernel32.lib
 if errorlevel 1 ( echo. & echo [!] BUILD FAILED & exit /b 1 )
@@ -61,11 +68,9 @@ echo.
 echo [*] Done:
 dir /b AutoOffline.dll
 echo.
-echo Verify it against the published binary:
-echo    python ..\verify-build.py AutoOffline.dll ..\dist\RtWorkQ.dll
-echo.
-echo (The raw SHA-256 will NOT match - the linker stamps the build time into the
-echo  binary. verify-build.py zeroes that field in both files before comparing.)
+echo Rename it to RtWorkQ.dll for the release.
+echo The build is reproducible: same source on the same toolchain gives the
+echo same bytes, so a rebuild will not drift on you.
 echo.
 echo To use it: rename it to RtWorkQ.dll and put it in the game folder -
 echo or simply run helper-scripts\1-disable-eaac.bat, which does that for you.
