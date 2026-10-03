@@ -41,7 +41,7 @@ if not defined VCVARS (
     echo     Select the "Desktop development with C++" workload.
     echo.
     echo     If Visual Studio is installed somewhere unusual, set VCVARS
-    echo     manually at the top of this script.
+    echo     manually near the top of this script.
     exit /b 1
 )
 
@@ -62,7 +62,7 @@ REM into the binary, so no two builds of the same source would ever match.
 cl /nologo /LD /O2 /MT /EHsc /W3 /Brepro /D_CRT_SECURE_NO_WARNINGS ^
    AutoOffline.cpp /Fe:AutoOffline.dll /Fo:obj\ ^
    /link kernel32.lib
-if errorlevel 1 ( echo. & echo [!] BUILD FAILED & exit /b 1 )
+if errorlevel 1 goto :build_failed
 
 echo.
 echo [*] Done:
@@ -74,7 +74,6 @@ echo same bytes, so a rebuild will not drift on you.
 echo.
 echo To use it: rename it to RtWorkQ.dll and put it in the game folder -
 echo or simply run helper-scripts\1-disable-eaac.bat, which does that for you.
-
 exit /b 0
 
 REM ---- ask vswhere where Visual Studio is ------------------------------------
@@ -82,10 +81,20 @@ REM ---- ask vswhere where Visual Studio is ------------------------------------
 REM  The result is read back from a file rather than with a `for /f` backtick
 REM  command: cmd's quote handling for those is fragile when the executable
 REM  path contains parentheses, as "Program Files (x86)" does.
-set "VSW_TMP=%TEMP%\_bfnbase_vswhere.txt"
+set "VSW_TMP=%TEMP%\_build_vswhere.txt"
 "%VSWHERE%" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath > "%VSW_TMP%" 2>nul
 for /f "usebackq tokens=*" %%i in ("%VSW_TMP%") do (
     if not defined VCVARS if exist "%%i\VC\Auxiliary\Build\vcvars64.bat" set "VCVARS=%%i\VC\Auxiliary\Build\vcvars64.bat"
 )
 del "%VSW_TMP%" 2>nul
 exit /b 0
+
+REM ---- failure path ----------------------------------------------------------
+:build_failed
+echo.
+echo [!] BUILD FAILED
+echo     If it says LNK1104 "cannot open AutoOffline.dll", the DLL is currently LOADED
+echo     in a process -- i.e. you already injected it. Close the game and rebuild.
+echo     NOTE: the game merely RUNNING does NOT lock the file. Only injection does.
+echo     Other errors above are real compile errors.
+exit /b 1
