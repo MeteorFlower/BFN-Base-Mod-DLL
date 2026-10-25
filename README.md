@@ -70,7 +70,6 @@ program. There is no single canonical binary.
 
 **Requirements**
 
-- Windows
 - **Build Tools for Visual Studio 2026** with the *Desktop development with C++*
   workload. It is free and includes no IDE:
 
