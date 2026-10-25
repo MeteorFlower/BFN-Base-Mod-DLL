@@ -16,8 +16,9 @@
 //
 //  设计上只做三件事: 等解密 -> 打补丁 -> 结束。
 //  没有开关文件、没有热键、没有探针、没有内存 dump。
-//  g_patches 表里列的补丁全部应用(当前为 #1 OfflineFix 与 #3 clientType;
-//  #2 与 #4 已注释停用)。增删补丁直接改表, 然后重启游戏。
+//  g_patches 表里列的补丁全部应用(当前为 #1 OfflineFix、#2 flag、#3 clientType、
+//  #5 interaction kill switch、#6 client inactivity kick; #4 已注释停用)。
+//  增删补丁直接改表, 然后重启游戏。
 // ============================================================================
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -28,10 +29,11 @@
 
 // --------------------------------------------------------------------------
 //  内存补丁表(与 PvZBCurrencies.dll 逐字节一致,已实证匹配本 build)
+//  rva      = 相对主模块基址的偏移, 运行时加基址得到绝对地址
 //  expected = 该地址原本的字节, 用来判断代码是否已解密
 // --------------------------------------------------------------------------
 struct PatchDef {
-  unsigned long long addr;
+  unsigned int rva;
   unsigned char bytes[8];
   int len;
   unsigned char expected[8];
@@ -40,13 +42,13 @@ struct PatchDef {
 };
 
 static const PatchDef g_patches[] = {
-    {0x14156FA30ull, {0xB0, 0x01, 0xC3}, 3, {0x48, 0x83, 0xEC}, 3, "OfflineFix #1"},
+    {0x156FA30u, {0xB0, 0x01, 0xC3}, 3, {0x48, 0x83, 0xEC}, 3, "OfflineFix #1"},
     // ---- 补丁 2: 把条件写入改成无条件写入 ----
     //  原指令: setb byte[rsp+21h]        ; 按条件置 0 或 1
     //  改为:   mov  byte[rsp+21h], 1     ; 恒置 1
     //  单独关掉本补丁试过: 游戏能进, 主线照样进不去。即本补丁不挡主线, 但也没能
     //  解决主线, 实际作用尚未确认。
-    {0x14178A8EDull,
+    {0x178A8EDu,
      {0xC6, 0x44, 0x24, 0x21, 0x01},
      5,
      {0x0F, 0x92, 0x44, 0x24, 0x21},
@@ -89,7 +91,35 @@ static const PatchDef g_patches[] = {
     //  2 / 3 (DEDICATED_SERVER / TOOLS) 尚未试过, 但它们更不像会携带玩家的 loadout。
     //
     //  取值由游戏目录下的 `autooffline_p3.txt` 决定, 默认 1。
-    {0x1425464F4ull, {0x01}, 1, {0x05}, 1, "UserProfileInfo+130h = clientType"},
+    {0x25464F4u, {0x01}, 1, {0x05}, 1, "UserProfileInfo+130h = clientType"},
+    // ---- 补丁 5: 交互禁用判定直接放行 ----
+    //  位置: 交互分发函数 sub_141727C50(交互实体, 玩家)
+    //    141727CC3  48 8B 08              mov  rcx,[rax]
+    //    141727CC6  80 39 00              cmp  byte [rcx],0     ; KillSwitch 名字是否为空
+    //    141727CC9  0F 84 B9 00 00 00     jz   +0xB9           ; 空 -> 允许
+    //  非空时会继续查 killswitch 定义(GameInteractionKillSwitch+16 = DisableInteraction)
+    //  并判玩家资格, 命中拒绝分支就弹 "This interaction is currently disabled!"。
+    //  改成 E9 BA 00 00 00 90 = 无条件跳到允许分支, 一次覆盖 KillSwitch 与
+    //  DisableInteraction 两种闸门; 不再需要按资产删连接。
+    {0x1727CC9u,
+     {0xE9, 0xBA, 0x00, 0x00, 0x00, 0x90},
+     6,
+     {0x0F, 0x84, 0xB9, 0x00, 0x00, 0x00},
+     6,
+     "interaction kill switch"},
+    // ---- 补丁 6: 关掉挂机检测 ----
+    //  sub_141D0F4B0 是每个玩家的空闲计时器: 每帧把 delta 累加到 +176, 再读
+    //  PVZServerSettings 的阈值(+36 击杀阈值 / +44 预警阈值 / +64 总开关)。
+    //  超过 +36 后调用 sub_141D05580(a1, 0x961799A3) 上报 ClientInactivity,
+    //  最终映射到 ExitToMenuReason_ClientInactivity + ID_ERROR_EXITTOMENU_CLIENTINACTIVITY
+    //  (就是"检测到你不在玩"然后退回主菜单)。
+    //  这里把上报调用改成 xor eax,eax; nop, 计数照常清零, 不会再触发。
+    {0x1D0F6F6u,
+     {0x31, 0xC0, 0x90, 0x90, 0x90},
+     5,
+     {0xE8, 0x85, 0x5E, 0xFF, 0xFF},
+     5,
+     "client inactivity kick"},
     // ---- 补丁 4: 放行一条被补丁 1 抑制的 Blaze RPC (已停用) ----
     //
     //  sub_141775E00(玩家槽) 向某个玩家槽发送"会话更新"RPC:
@@ -104,10 +134,9 @@ static const PatchDef g_patches[] = {
     //  RPC 上传。本补丁只放行这一个调用点, 其余 6 个照旧抑制。
     //      call sub_14156FA30  ->  xor eax,eax ; nop x3
     //
-    //  当前停用: 与补丁 3 一并注释, 使 g_patches 只剩补丁 1 一条, 恢复原始行为
-    //  (补丁 1 继续抑制全部 7 个调用点, 含这一个)。
+    //  当前停用: 这个调用点保持被补丁 1 抑制, 不单独放行。
     // {
-    // 0x141775E4Aull,
+    // 0x1775E4Au,
     //     {0x31, 0xC0, 0x90, 0x90, 0x90},
     //     5,
     //     {0xE8, 0xE1, 0x9B, 0xDF, 0xFF},
@@ -140,6 +169,8 @@ static const int NPATCH = (int)(sizeof(g_patches) / sizeof(g_patches[0]));
 
 static FILE *g_log = nullptr;
 static std::string g_dir;
+// 主模块基址, Worker 启动时取; 补丁表的 rva 全部相对它
+static unsigned long long g_base = 0;
 
 // --------------------------------------------------------------------------
 //  日志(只写文件,无控制台;fopen "w" = 每次运行清空)
@@ -180,7 +211,7 @@ static bool AllExpectedPresent() {
   for (int i = 0; i < NPATCH; ++i) {
     const PatchDef &p = g_patches[i];
     unsigned char cur[8] = {0};
-    if (!SafeReadBytes(p.addr, cur, p.explen))
+    if (!SafeReadBytes(g_base + p.rva, cur, p.explen))
       return false;
     if (memcmp(cur, p.expected, p.explen) != 0)
       return false;
@@ -199,7 +230,7 @@ static bool AllExpectedPresent() {
 //  文件不存在 = 用 0x01。
 // --------------------------------------------------------------------------
 static unsigned char g_p3_value = 0x01;
-#define P3_ADDR 0x1425464F4ull
+#define P3_RVA 0x25464F4u
 
 static void LoadP3Value() {
   std::string path = g_dir + "\\autooffline_p3.txt";
@@ -224,389 +255,27 @@ static void ApplyPatches() {
 
     unsigned char blob[8] = {0};
     memcpy(blob, p.bytes, p.len);
-    if (p.addr == P3_ADDR)
+    if (p.rva == P3_RVA)
       blob[0] = g_p3_value;  // 补丁 3 的字节来自 autooffline_p3.txt
 
+    unsigned long long addr = g_base + p.rva;
+
+    // RW 而不是 RWX: 写入窗口里页面短暂不可执行, 但不再出现可写又可执行的
+    // 页属性组合。补丁在开局前一次性写完, 不存在别的线程正在执行这几页的情况。
     DWORD old = 0;
-    if (!VirtualProtect((LPVOID)p.addr, p.len, PAGE_EXECUTE_READWRITE, &old)) {
-      Log("!! VirtualProtect FAILED @ %llX (%s) err=%lu", p.addr, p.desc, GetLastError());
+    if (!VirtualProtect((LPVOID)addr, p.len, PAGE_READWRITE, &old)) {
+      Log("!! VirtualProtect FAILED @ %llX (%s) err=%lu", addr, p.desc, GetLastError());
       continue;
     }
-    memcpy((void *)p.addr, blob, p.len);
-    VirtualProtect((LPVOID)p.addr, p.len, old, &old);
+    memcpy((void *)addr, blob, p.len);
+    VirtualProtect((LPVOID)addr, p.len, old, &old);
 
-    bool ok = (memcmp((void *)p.addr, blob, p.len) == 0);
-    Log("Patch @ %llX  %s  %s   byte[0]=0x%02X", p.addr, ok ? "OK  " : "FAIL", p.desc, blob[0]);
+    bool ok = (memcmp((void *)addr, blob, p.len) == 0);
+    Log("Patch @ %llX  %s  %s   byte[0]=0x%02X", addr, ok ? "OK  " : "FAIL", p.desc,
+        blob[0]);
   }
 }
 
-// --------------------------------------------------------------------------
-//  网络超时改成超大值(2026-09-18)
-// --------------------------------------------------------------------------
-//  为什么不在 EBX 里改:`ServerSettings` / `PVZServerSettings` 是 SystemSettings,
-//  运行时建的对象,**没有对应的 EBX 资产** —— 只能在运行时写进去。
-//
-//  取法:`0x14421CFD0` 是「类型 -> 实例」哈希表,`sub_14046F430(map, key)` 是查找函数。
-//      表结构(反编译坐实):
-//          v5 = *(u32*)(map + 208)            桶数
-//          v6 = *(u64*)(map + 200)            桶数组
-//          v7 = *(u64**)(v6 + 8*(key % v5))   桶; 串链是 {key, value, next}
-//          return v7[1]                       value = 实例
-//      key 是 TypeInfo 的地址, TypeInfo 前 0x70 字节里存着类型名的指针。
-//  这里不猜 key, 而是直接遍历整张表按类型名匹配, 命中才写 —— 写错容器的风险为零。
-//
-//  字段偏移来自 SDK 的 ebx_offset(Float32):
-//      GameplayClientServer.ServerSettings  IngameTimeout          +72 (0x48)
-//                                           LoadingTimeout         +80 (0x50)
-//      PVZShared.PVZServerSettings          ClientInActivityTimeOut +16
-//                                           InActivityTimeOut      +20
-// --------------------------------------------------------------------------
-#define G_TYPE_INSTANCE_MAP 0x14421CFD0ull
-#define TIMEOUT_SECONDS 126000.0f  // ~35 小时
-
-static bool Rd64(unsigned long long a, unsigned long long *out) {
-  __try {
-    *out = *(volatile unsigned long long *)a;
-    return true;
-  } __except (EXCEPTION_EXECUTE_HANDLER) {
-    return false;
-  }
-}
-
-static bool Rd32(unsigned long long a, unsigned int *out) {
-  __try {
-    *out = *(volatile unsigned int *)a;
-    return true;
-  } __except (EXCEPTION_EXECUTE_HANDLER) {
-    return false;
-  }
-}
-
-static bool RdStr(unsigned long long a, char *out, int cap) {
-  __try {
-    for (int i = 0; i < cap - 1; ++i) {
-      char c = *(volatile char *)(a + i);
-      out[i] = c;
-      if (!c)
-        return true;
-    }
-    out[cap - 1] = 0;
-    return true;
-  } __except (EXCEPTION_EXECUTE_HANDLER) {
-    out[0] = 0;
-    return false;
-  }
-}
-
-static bool LooksLikeTypeName(const char *s) {
-  int n = 0;
-  for (; s[n]; ++n) {
-    if (n >= 80)
-      return false;
-    if ((unsigned char)s[n] < 0x20 || (unsigned char)s[n] > 0x7E)
-      return false;
-  }
-  return n >= 4 && strchr(s, ' ') == nullptr;  // 类型名不带空格
-}
-
-// 从类型信息里扫出类型名。两种形态都试:
-//   (a) 槽里存的是指针, 指向字符串
-//   (b) 槽里直接就是字符串本身
-// 前 12 条实测都是 (b) —— fb::string 对短名字走 SSO, 字符直接存在对象里,
-// 所以内联那种才是常态。
-static bool CopyName(const char *buf, char *out, int cap) {
-  for (int i = 0; i < cap - 1 && buf[i]; ++i)
-    out[i] = buf[i], out[i + 1] = 0;
-  return true;
-}
-
-static bool ScanForName(unsigned long long base, char *out, int cap) {
-  for (unsigned long long off = 0; off < 0x100; off += 8) {
-    char buf[96];
-    unsigned long long p = 0;
-    if (Rd64(base + off, &p) && p >= 0x10000 && RdStr(p, buf, sizeof(buf)) &&
-        LooksLikeTypeName(buf))
-      return CopyName(buf, out, cap);
-    if (RdStr(base + off, buf, sizeof(buf)) && LooksLikeTypeName(buf))
-      return CopyName(buf, out, cap);
-  }
-  return false;
-}
-
-// 表里每条 entry 的 key 不是类型描述符本身: 它第 0 个字是个指针, 指向真正的
-// 描述符。所以要多解一层指针。
-static bool ReadTypeName(unsigned long long ti, char *out, int cap) {
-  out[0] = 0;
-  if (ScanForName(ti, out, cap))
-    return true;
-  unsigned long long lvl1 = 0;
-  if (Rd64(ti, &lvl1) && lvl1 >= 0x10000 && lvl1 != ti && ScanForName(lvl1, out, cap))
-    return true;
-  return false;
-}
-
-static void WriteFloat(unsigned long long addr, float v, const char *what, bool verbose) {
-  DWORD old = 0;
-  if (!VirtualProtect((LPVOID)addr, 4, PAGE_EXECUTE_READWRITE, &old)) {
-    if (verbose)
-      Log("   !! %s @ %llX: VirtualProtect failed (%lu)", what, addr, GetLastError());
-    return;
-  }
-  memcpy((void *)addr, &v, 4);
-  VirtualProtect((LPVOID)addr, 4, old, &old);
-  if (verbose)
-    Log("   %s <- %.1f  @ %llX", what, v, addr);
-}
-
-// 各类型的字段偏移不同, 必须按类型精确选择 —— 写错会覆盖别的字段甚至越界:
-//   GameplayClientServer.ServerSettings   size 96, 自有字段从 +32 起 -> +72 / +80
-//   PVZShared.PVZServerSettings           size 52, 自有字段 12..49   -> +16 / +20
-//   (PVZDedicatedServerSettings 布局未知, 一律不碰)
-static bool KnownLayout(const char *name, unsigned long long *oA, unsigned long long *oB,
-                        const char **nA, const char **nB) {
-  if (strcmp(name, "ServerSettings") == 0) {
-    *oA = 72;
-    *oB = 80;
-    *nA = "IngameTimeout";
-    *nB = "LoadingTimeout";
-    return true;
-  }
-  if (strcmp(name, "PVZServerSettings") == 0) {
-    *oA = 16;
-    *oB = 20;
-    *nA = "ClientInActivityTimeOut";
-    *nB = "InActivityTimeOut";
-    return true;
-  }
-  return false;
-}
-
-// 走一遍「类型 -> 实例」表。
-//   返回 false = 表还没建好(调用方稍后重试); true = 走完了。
-//   hit = 匹配到的容器数; ok = 其中写完并读回验证通过的个数。
-//   命中即当场打印原值再写入, 不分"先探测、后正式"两遍 —— 那样探测那一遍什么
-//   都看不到, 出问题时日志是空的, 无法诊断。
-static bool WalkTypeMap(int *seenOut, int *hitOut, int *okOut, unsigned int *nbOut, bool verbose) {
-  *seenOut = 0;
-  *hitOut = 0;
-  *okOut = 0;
-  *nbOut = 0;
-
-  unsigned long long map = 0;
-  if (!Rd64(G_TYPE_INSTANCE_MAP, &map) || !map)
-    return false;
-
-  unsigned long long buckets = 0;
-  unsigned int nb = 0;
-  if (!Rd64(map + 200, &buckets) || !buckets || !Rd32(map + 208, &nb) || !nb || nb > 100000)
-    return false;
-  *nbOut = nb;
-
-  float wf = TIMEOUT_SECONDS;
-  unsigned int want = 0;
-  memcpy(&want, &wf, 4);
-
-  int seen = 0, hit = 0, ok = 0;
-  for (unsigned int i = 0; i < nb; ++i) {
-    unsigned long long e = 0;
-    if (!Rd64(buckets + 8ull * i, &e))
-      continue;
-    for (int guard = 0; e && guard < 2048; ++guard) {
-      unsigned long long key = 0, val = 0;
-      if (Rd64(e, &key) && Rd64(e + 8, &val) && key >= 0x10000 && val >= 0x10000) {
-        char name[96];
-        if (ReadTypeName(key, name, sizeof(name))) {
-          ++seen;
-          unsigned long long oA = 0, oB = 0;
-          const char *nA = nullptr, *nB = nullptr;
-          if (strstr(name, "ServerSettings") && KnownLayout(name, &oA, &oB, &nA, &nB)) {
-            ++hit;
-            if (verbose) {
-              Log("   [%s]  container=0x%llX", name, val);
-              float cur = 0.0f;
-              if (Rd32(val + oA, (unsigned int *)&cur))
-                Log("      was %-22s = %.1f", nA, cur);
-              if (Rd32(val + oB, (unsigned int *)&cur))
-                Log("      was %-22s = %.1f", nB, cur);
-            }
-            WriteFloat(val + oA, TIMEOUT_SECONDS, nA, verbose);
-            WriteFloat(val + oB, TIMEOUT_SECONDS, nB, verbose);
-            unsigned int wa = 0, wb = 0;
-            if (Rd32(val + oA, &wa) && Rd32(val + oB, &wb) && wa == want && wb == want)
-              ++ok;
-            else if (verbose)
-              Log("      !! read-back mismatch on this container");
-          } else if (verbose && strstr(name, "ServerSettings")) {
-            Log("   [%s]  skipped (layout unknown - not touching it)", name);
-          }
-        }
-      }
-      unsigned long long next = 0;
-      if (!Rd64(e + 16, &next))
-        break;
-      e = next;
-    }
-  }
-  *seenOut = seen;
-  *hitOut = hit;
-  *okOut = ok;
-  return true;
-}
-
-// 一次性诊断: 打印表里前 N 条的 key/val, 以及 key 前 0x70 字节里能读成字符串的槽。
-// 用于确认 key 是不是 TypeInfo、名字指针位于第几个字节。
-static void DumpTypeEntries(int maxN) {
-  Log("   --- dumping first %d entries ---", maxN);
-  unsigned long long map = 0;
-  if (!Rd64(G_TYPE_INSTANCE_MAP, &map) || !map) {
-    Log("   (map is null)");
-    return;
-  }
-  unsigned long long buckets = 0;
-  unsigned int nb = 0;
-  if (!Rd64(map + 200, &buckets) || !buckets || !Rd32(map + 208, &nb) || !nb || nb > 100000) {
-    Log("   (bad map shape: buckets=0x%llX nb=%u)", buckets, nb);
-    return;
-  }
-
-  int shown = 0;
-  for (unsigned int i = 0; i < nb && shown < maxN; ++i) {
-    unsigned long long e = 0;
-    if (!Rd64(buckets + 8ull * i, &e))
-      continue;
-    for (int g = 0; e && g < 64 && shown < maxN; ++g) {
-      unsigned long long key = 0, val = 0;
-      if (Rd64(e, &key) && Rd64(e + 8, &val)) {
-        ++shown;
-        Log("   #%-2d key=%016llX  val=%016llX", shown, key, val);
-        if (shown <= 6) {  // 前 6 条给 key 的原始视图, 看布局用
-          for (unsigned long long r = 0; r < 0x40; r += 16) {
-            unsigned char row[16];
-            char hex[64], asc[20];
-            if (!SafeReadBytes(key + r, row, 16))
-              break;
-            for (int q = 0; q < 16; ++q)
-              _snprintf_s(hex + q * 3, 4, _TRUNCATE, "%02X ", row[q]);
-            for (int q = 0; q < 16; ++q)
-              asc[q] = (row[q] >= 0x20 && row[q] < 0x7F) ? (char)row[q] : '.';
-            asc[16] = 0;
-            Log("        key+%02llX  %s |%s|", r, hex, asc);
-          }
-          // 再解一层指针 —— 名字多半在 *(key) 里
-          unsigned long long lv1 = 0;
-          if (Rd64(key, &lv1) && lv1 >= 0x10000 && lv1 != key) {
-            Log("        *(key) = %016llX", lv1);
-            for (unsigned long long r = 0; r < 0x40; r += 16) {
-              unsigned char row[16];
-              char hex[64], asc[20];
-              if (!SafeReadBytes(lv1 + r, row, 16))
-                break;
-              for (int q = 0; q < 16; ++q)
-                _snprintf_s(hex + q * 3, 4, _TRUNCATE, "%02X ", row[q]);
-              for (int q = 0; q < 16; ++q)
-                asc[q] = (row[q] >= 0x20 && row[q] < 0x7F) ? (char)row[q] : '.';
-              asc[16] = 0;
-              Log("        [*(key)]+%02llX  %s |%s|", r, hex, asc);
-            }
-          }
-        }
-        for (unsigned long long off = 0; off < 0x70; off += 8) {
-          unsigned long long p = 0;
-          if (!Rd64(key + off, &p) || p < 0x10000)
-            continue;
-          char buf[80];
-          if (!RdStr(p, buf, sizeof(buf)))
-            continue;
-          int n = 0;
-          bool pr = true;
-          for (; buf[n]; ++n) {
-            if (n >= 72 || (unsigned char)buf[n] < 0x20 || (unsigned char)buf[n] > 0x7E) {
-              pr = false;
-              break;
-            }
-          }
-          if (pr && n >= 4)
-            Log("        key+0x%02llX -> \"%s\"", off, buf);
-        }
-      }
-      unsigned long long nx = 0;
-      if (!Rd64(e + 16, &nx))
-        break;
-      e = nx;
-    }
-  }
-  Log("   --- end dump (%d shown) ---", shown);
-}
-
-static void BumpTimeouts() {
-  Log("");
-  Log("---- network timeouts -> %.0f s ----", TIMEOUT_SECONDS);
-
-  // 不判断"表什么时候建好", 而是持续写入, 直到连续 10 秒每个容器都能读回目标值。
-  // 好处: 一是不需要判断就绪时机; 二是自带验证 —— 值若被重置, 稳定计数即清零并重写。
-  const DWORD WATCH_S = 300;
-
-  DWORD t0 = GetTickCount();
-  int stable = 0;
-  bool logged = false, dumped = false, everHit = false, lastReady = false;
-  int lastSeen = -1;
-
-  for (int attempt = 0;; ++attempt) {
-    int seen = 0, hit = 0, ok = 0;
-    unsigned int nb = 0;
-    bool ready = WalkTypeMap(&seen, &hit, &ok, &nb, !logged);  // 头一次命中才打细节
-
-    // 表第一次起来时, 把前几条的真实形状打出来(只做一次)
-    if (ready && !dumped) {
-      dumped = true;
-      DumpTypeEntries(12);
-    }
-
-    if (hit > 0) {
-      everHit = true;
-      if (!logged) {
-        logged = true;
-        Log("   writing...");
-      }
-      if (ok == hit)
-        ++stable;  // 每个匹配到的容器都写进去了, 且读回一致
-      else
-        stable = 0;  // 有容器被重置(或写不进) -> 重新数
-    } else {
-      stable = 0;
-    }
-
-    DWORD el = (GetTickCount() - t0) / 1000;
-
-    if (stable >= 10) {
-      Log("   stable at %.0f for %d s -> done (%lu s total)", TIMEOUT_SECONDS, stable,
-          (unsigned long)el);
-      return;
-    }
-
-    // 心跳: 状态变了就打, 否则每 10 秒一次
-    if (ready != lastReady || seen != lastSeen || (attempt % 10) == 0) {
-      if (!ready)
-        Log("   [%3lus] map ptr at 0x%llX is NULL - not built yet", (unsigned long)el,
-            G_TYPE_INSTANCE_MAP);
-      else if (hit == 0)
-        Log("   [%3lus] table up (buckets=%u, %d named types) - no match yet", (unsigned long)el,
-            nb, seen);
-      else
-        Log("   [%3lus] written; waiting for it to hold (stable %d/10 s)", (unsigned long)el,
-            stable);
-      lastReady = ready;
-      lastSeen = seen;
-    }
-
-    if (el >= WATCH_S) {
-      Log("   !! gave up after %lu s (map %s, matches %s)", (unsigned long)el,
-          lastReady ? "up" : "never built", everHit ? "found" : "none");
-      return;
-    }
-    Sleep(1000);
-  }
-}
 
 static std::string DirOfSelf(HMODULE self) {
   char p[MAX_PATH] = {0};
@@ -627,6 +296,12 @@ static DWORD WINAPI Worker(LPVOID self) {
 
   Log("========================================================");
   Log("AutoOffline loaded (as RtWorkQ.dll). Dir: %s", g_dir.c_str());
+  g_base = (unsigned long long)GetModuleHandleA(nullptr);
+  if (!g_base) {
+    Log("!! Cannot resolve the main module base.");
+    Log("========================================================");
+    return 0;
+  }
   LoadP3Value();
   Log("Waiting for the game code to be decrypted before patching...");
 
@@ -653,7 +328,6 @@ static DWORD WINAPI Worker(LPVOID self) {
   Log("Code is decrypted (byte patterns matched) after %lu s.",
       (unsigned long)((GetTickCount() - t0) / 1000));
   ApplyPatches();
-  BumpTimeouts();
   Log("Done.");
   Log("========================================================");
   return 0;

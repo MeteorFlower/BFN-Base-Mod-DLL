@@ -53,7 +53,7 @@ no obfuscation, no downloads, no encoded blobs.
 
 | Path | What it is |
 |---|---|
-| `src/AutoOffline.cpp` | The DLL source. This is the whole program - 670 lines. |
+| `src/AutoOffline.cpp` | The DLL source. This is the whole program. |
 | `src/build.bat` | Builds it with MSVC. |
 | `helper-scripts/1-disable-eaac.bat` | Disables EAAC and installs `RtWorkQ.dll`. |
 | `helper-scripts/2-enable-eaac.bat` | Undoes that. |
@@ -70,7 +70,7 @@ program. There is no single canonical binary.
 
 **Requirements**
 
-- Windows 10 / 11
+- Windows
 - **Build Tools for Visual Studio 2026** with the *Desktop development with C++*
   workload. It is free and includes no IDE:
 
@@ -150,8 +150,9 @@ and only writes to its log.
 proves the code has decrypted. There are a handful of them, each documented
 in-line with what the original instruction was and why it's changed.
 
-**4. Runtime settings.** A few network timeouts and one profile field are set at
-runtime rather than patched, because they live in objects rather than in code.
+**4. One value is configurable.** Patch 3 writes a byte that can be changed
+without rebuilding: put `autooffline_p3.txt` next to `RtWorkQ.dll` with the
+number to use. Everything else is fixed at compile time.
 
 ---
 

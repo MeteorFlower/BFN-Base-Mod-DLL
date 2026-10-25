@@ -159,8 +159,7 @@ echo   Done. EAAC is OFF and RtWorkQ.dll is in place.
 echo ============================================================
 echo.
 echo   Next steps:
-echo     1. Install the Base Mod .fbmod with Frosty Mod Manager
-echo        (if you have not already), then launch the game from Frosty.
+echo     1. Launch the game.
 echo     2. A log appears next to the game EXE:  autooffline_log.txt
 echo.
 echo   To undo: run 2-enable-eaac.bat
