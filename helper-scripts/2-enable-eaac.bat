@@ -10,6 +10,9 @@ REM       shipped next to this script. Anything else is moved to stale\ instead
 REM       of being deleted, so nothing of yours is ever lost.
 REM    4. Removes CryptBase.dll (a Frosty Mod Manager leftover that EAAC dislikes)
 REM
+REM  It leaves autooffline_save.json in place - that is your saved loadout
+REM  (which skins and perks are equipped), not a mod file. 3-clear-save.bat deletes it.
+REM
 REM  After this you are back to a clean, online-capable install:
 REM  Rux shop and online play work again.
 REM
@@ -30,7 +33,7 @@ if errorlevel 1 (
   if "%~1"=="" (
     powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
   ) else (
-    powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -ArgumentList '%~1' -Verb RunAs"
+    powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -ArgumentList '\"%~1\"' -Verb RunAs"
   )
   if errorlevel 1 (
     echo.
@@ -176,11 +179,16 @@ echo     (Frosty Mod Manager re-adds it the next time it launches the game.)
 :DONE
 echo.
 echo ============================================================
-echo   Done. EAAC is ON and no mod files are left in the game folder.
+echo   Done. EAAC is ON and the mod is removed.
 echo ============================================================
 echo.
 echo   Online play and the Rux shop are available again.
 echo   Run 1-disable-eaac.bat whenever you want to use the Base Mod.
+echo.
+echo   Your saved loadout was left alone:
+echo     autooffline_save.json
+echo   Keep it for the next time you use the mod, or delete it with
+echo   3-clear-save.bat if you no longer need it.
 echo.
 pause
 exit /b 0
@@ -231,9 +239,12 @@ if defined STEAM (
   call :try "!STEAM!\steamapps\common\PVZ Battle for Neighborville"
   if defined G goto :eof
   if exist "!STEAM!\steamapps\libraryfolders.vdf" (
-    for /f "usebackq tokens=2 delims=	 " %%P in (`findstr /i /c:"\"path\"" "!STEAM!\steamapps\libraryfolders.vdf" 2^>nul`) do (
+    for /f "usebackq tokens=* delims=" %%P in (`findstr /i /c:"\"path\"" "!STEAM!\steamapps\libraryfolders.vdf" 2^>nul`) do (
       if not defined G (
-        set "LIB=%%~P"
+        set "LIB=%%P"
+        set LIB=!LIB:*"path"=!
+        set LIB=!LIB:"=!
+        for /f "tokens=*" %%Q in ("!LIB!") do set "LIB=%%~Q"
         set "LIB=!LIB:\\=\!"
         call :try "!LIB!\steamapps\common\PVZ Battle for Neighborville"
       )
@@ -252,7 +263,7 @@ for %%K in (
 ) do (
   if not defined G (
     set "ED="
-    for /f "tokens=2,*" %%A in ('reg query %%K /v "Install Dir" 2^>nul') do set "ED=%%B"
+    for /f "tokens=3,*" %%A in ('reg query %%K /v "Install Dir" 2^>nul') do set "ED=%%B"
     if defined ED call :try "!ED!"
   )
 )

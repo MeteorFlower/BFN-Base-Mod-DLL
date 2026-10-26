@@ -59,8 +59,15 @@ link 2>&1 | findstr /C:"Version"
 echo [*] Compiling...
 REM /Brepro = reproducible build. Without it the linker stamps the build time
 REM into the binary, so no two builds of the same source would ever match.
+REM MinHook is compiled straight into the DLL: no extra runtime file.
+REM Only the four files x64 needs; hde32.c is 32-bit only.
+set MINHOOK=..\third_party\minhook\src\hook.c ^
+            ..\third_party\minhook\src\trampoline.c ^
+            ..\third_party\minhook\src\buffer.c ^
+            ..\third_party\minhook\src\hde\hde64.c
+
 cl /nologo /LD /O2 /MT /EHsc /W3 /Brepro /D_CRT_SECURE_NO_WARNINGS ^
-   AutoOffline.cpp /Fe:AutoOffline.dll /Fo:obj\ ^
+   AutoOffline.cpp %MINHOOK% /Fe:AutoOffline.dll /Fo:obj\ ^
    /link kernel32.lib
 if errorlevel 1 goto :build_failed
 
@@ -72,8 +79,9 @@ echo Rename it to RtWorkQ.dll for the release.
 echo The build is reproducible: same source on the same toolchain gives the
 echo same bytes, so a rebuild will not drift on you.
 echo.
-echo To use it: rename it to RtWorkQ.dll and put it in the game folder -
-echo or simply run helper-scripts\1-disable-eaac.bat, which does that for you.
+echo To use it: copy AutoOffline.dll into helper-scripts\ as RtWorkQ.dll,
+echo then run helper-scripts\1-disable-eaac.bat - it installs that copy into
+echo the game folder for you.
 exit /b 0
 
 REM ---- ask vswhere where Visual Studio is ------------------------------------

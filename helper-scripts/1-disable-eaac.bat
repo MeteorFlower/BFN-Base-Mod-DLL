@@ -26,7 +26,7 @@ if errorlevel 1 (
   if "%~1"=="" (
     powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
   ) else (
-    powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -ArgumentList '%~1' -Verb RunAs"
+    powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -ArgumentList '\"%~1\"' -Verb RunAs"
   )
   if errorlevel 1 (
     echo.
@@ -213,9 +213,12 @@ if defined STEAM (
   call :try "!STEAM!\steamapps\common\PVZ Battle for Neighborville"
   if defined G goto :eof
   if exist "!STEAM!\steamapps\libraryfolders.vdf" (
-    for /f "usebackq tokens=2 delims=	 " %%P in (`findstr /i /c:"\"path\"" "!STEAM!\steamapps\libraryfolders.vdf" 2^>nul`) do (
+    for /f "usebackq tokens=* delims=" %%P in (`findstr /i /c:"\"path\"" "!STEAM!\steamapps\libraryfolders.vdf" 2^>nul`) do (
       if not defined G (
-        set "LIB=%%~P"
+        set "LIB=%%P"
+        set LIB=!LIB:*"path"=!
+        set LIB=!LIB:"=!
+        for /f "tokens=*" %%Q in ("!LIB!") do set "LIB=%%~Q"
         set "LIB=!LIB:\\=\!"
         call :try "!LIB!\steamapps\common\PVZ Battle for Neighborville"
       )
@@ -234,7 +237,7 @@ for %%K in (
 ) do (
   if not defined G (
     set "ED="
-    for /f "tokens=2,*" %%A in ('reg query %%K /v "Install Dir" 2^>nul') do set "ED=%%B"
+    for /f "tokens=3,*" %%A in ('reg query %%K /v "Install Dir" 2^>nul') do set "ED=%%B"
     if defined ED call :try "!ED!"
   )
 )

@@ -23,3 +23,6 @@ dist/
 # Logs
 *.log
 autooffline_log*.txt
+
+# Local source backups
+src/_bak/

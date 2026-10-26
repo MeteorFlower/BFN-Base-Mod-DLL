@@ -29,13 +29,15 @@ Note that the game never calls any function *from* `RtWorkQ.dll` - the file
 name is only used as an entry point. Our DLL exports nothing. See
 [How it works](#how-it-works) below.
 
-**2. The two `.bat` files rename and copy files inside the game folder.**
+**2. The `.bat` files rename and copy files inside the game folder.**
 
 `1-disable-eaac.bat` renames `EAAntiCheat.GameServiceLauncher.exe` to
 `.exe.bak` and copies `RtWorkQ.dll` into the game folder.
-`2-enable-eaac.bat` undoes exactly that.
+`2-enable-eaac.bat` puts the anti-cheat launcher back, removes that copy of
+`RtWorkQ.dll` and also removes `CryptBase.dll`, a Frosty Mod Manager leftover
+the anti-cheat rejects. `3-clear-save.bat` deletes your saved loadout.
 
-Both are plain text. **Open them in Notepad and read every line.** They contain
+They are plain text. **Open them in Notepad and read every line.** They contain
 no obfuscation, no downloads, no encoded blobs.
 
 **3. What the DLL does *not* do.**
@@ -43,9 +45,13 @@ no obfuscation, no downloads, no encoded blobs.
 - It does **not** connect to the network. There is no socket, no HTTP, no WinINet.
 - It does **not** read, collect, or transmit any personal data.
 - It does **not** inject into another process. It *is* the process - the game loads it.
-- It does **not** modify any file. It writes one log file, `autooffline_log.txt`,
-  next to itself.
-- It does **not** touch the game's memory beyond the handful of byte patches listed below.
+- It does **not** modify any file belonging to the game. It writes two files next
+  to itself: `autooffline_log.txt`, and `autooffline_save.json`, which records
+  which skins and perks you have **equipped**. It does not store or change what
+  you own: no unlocks, no items, no progress.
+- It does **not** rewrite the body of any game function. It installs a small
+  number of entry hooks, listed below - each one is a jump at the function's
+  first bytes plus a trampoline, and it is gone when the game exits.
 
 ---
 
@@ -55,8 +61,11 @@ no obfuscation, no downloads, no encoded blobs.
 |---|---|
 | `src/AutoOffline.cpp` | The DLL source. This is the whole program. |
 | `src/build.bat` | Builds it with MSVC. |
+| `third_party/minhook/` | MinHook, BSD-2-Clause, vendored and compiled in. |
+| `third_party/nlohmann/` | JSON for Modern C++, MIT, single header, compiled in. |
 | `helper-scripts/1-disable-eaac.bat` | Disables EAAC and installs `RtWorkQ.dll`. |
 | `helper-scripts/2-enable-eaac.bat` | Undoes that. |
+| `helper-scripts/3-clear-save.bat` | Deletes your local save. |
 
 ### Getting the DLL
 
@@ -97,8 +106,12 @@ build.bat
 `build.bat` calls `vcvars64.bat` and then:
 
 ```
+set MINHOOK=..\third_party\minhook\src\hook.c ^
+            ..\third_party\minhook\src\trampoline.c ^
+            ..\third_party\minhook\src\buffer.c ^
+            ..\third_party\minhook\src\hde\hde64.c
 cl /nologo /LD /O2 /MT /EHsc /W3 /Brepro /D_CRT_SECURE_NO_WARNINGS ^
-   AutoOffline.cpp /Fe:AutoOffline.dll /Fo:obj\ ^
+   AutoOffline.cpp %MINHOOK% /Fe:AutoOffline.dll /Fo:obj\ ^
    /link kernel32.lib
 ```
 
@@ -139,33 +152,54 @@ the game folder wins. Our `DllMain` is the entry point. No injector, no
 external tool - the game loads us itself.
 
 **2. Waiting for decryption.** The executable is protected, and its code is
-decrypted at runtime. Patching too early would write into still-encrypted data
-and silently do nothing once it decrypts. So the DLL **polls until the expected
-original bytes appear**, then patches. If they never appear, it patches nothing
-and only writes to its log.
+decrypted at runtime. Hooking too early would decode still-encrypted bytes and
+produce a broken trampoline. So the DLL **polls until the expected original
+bytes appear**, then hooks. If they never appear, it hooks nothing and only
+writes to its log - including which pattern did not match.
 
-**3. The patches.** A small table in the source (`g_patches`) lists each patch as
-*address + new bytes + expected original bytes*. The expected bytes are what
-proves the code has decrypted. There are a handful of them, each documented
-in-line with what the original instruction was and why it's changed.
+**3. The hooks.** A small table in the source (`g_patches`) lists each entry as
+*verification address + expected original bytes + the function to hook*. The
+expected bytes are what proves the code has decrypted. Each hook takes over the
+function's entry, calls it, and changes exactly one behaviour; the offline-fix
+hook is the exception and answers without calling the original. The only bytes
+that change are the few at each hooked entry, which MinHook writes and restores
+itself - no game instruction is edited by hand, so there is nothing to get
+wrong about instruction encoding. Each entry is documented in-line with what the
+original function does and why it is being intercepted.
 
-**4. One value is configurable.** Patch 3 writes a byte that can be changed
-without rebuilding: put `autooffline_p3.txt` next to `RtWorkQ.dll` with the
-number to use. Everything else is fixed at compile time.
+**4. One value is configurable.** The `clientType` hook writes a value that can
+be changed without rebuilding: put `autooffline_p3.txt` next to `RtWorkQ.dll`
+with the number to use. Everything else is fixed at compile time.
+
+**5. Your loadout is kept locally.** Offline the server never sends your equipped
+skins and perks back, so they used to reset on every launch. The DLL now records
+which items you have equipped - per character, for each of the three loadout
+slots - as soon as you change it in the menus, and writes it back when the game
+builds that character's config model, which happens before anything can read it.
+The file is `autooffline_save.json` next to `RtWorkQ.dll`: plain JSON, one entry
+per option, editable by hand. `3-clear-save.bat` deletes it.
+
+To be clear about the scope: this is a record of the current setup, not of what
+you own. Unlocks, items and progress are not stored, not changed, and not sent
+anywhere - installing or removing the mod cannot cost you anything you have
+earned. If the file is deleted, the next launch simply starts from whatever is
+equipped at that moment.
 
 ---
 
 ## The helper scripts
 
-Both scripts are self-contained and **ask for administrator rights**, because
-they rename and copy files inside the game folder.
+The scripts are self-contained and **ask for administrator rights**, because
+they change files inside the game folder.
 
 - **They find your game automatically** - Steam registry, Steam library folders,
   the EA app registry, then common install locations. You can also drag your
   game folder onto the `.bat` if detection fails.
-- **Nothing is ever deleted.** A foreign `RtWorkQ.dll` is moved to a `stale\`
-  folder instead of being overwritten. `2-enable-eaac.bat` only removes a
-  `RtWorkQ.dll` that is byte-identical to the one shipped here.
+- **Nothing is deleted without saying so.** A foreign `RtWorkQ.dll` is moved to a
+  `stale\` folder instead of being overwritten; `2-enable-eaac.bat` only removes a
+  `RtWorkQ.dll` that is byte-identical to the one shipped here. The one
+  exception is `3-clear-save.bat`: it deletes `autooffline_save.json`
+  (and asks for a confirmation first), because that is the whole point of it.
 - **They refuse to run while the game is open**, so files are never changed
   underneath a running game.
 - **They are idempotent** - running them repeatedly is safe.
@@ -175,6 +209,11 @@ they rename and copy files inside the game folder.
 ## License
 
 MIT - see [LICENSE](LICENSE).
+
+`third_party/minhook` is MinHook by Tsuda Kageyu, BSD-2-Clause - see
+`third_party/minhook/LICENSE.txt`. `third_party/nlohmann` is JSON for Modern
+C++ by Niels Lohmann, MIT - see the header for its notice. Both are compiled
+into the DLL; nothing is downloaded at build time.
 
 This project is not affiliated with, endorsed by, or sponsored by Electronic
 Arts Inc. It is an independent, community-developed mod for educational and
